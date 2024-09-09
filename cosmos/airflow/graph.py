@@ -262,6 +262,7 @@ def build_airflow_graph(
     render_config: RenderConfig,
     task_group: TaskGroup | None = None,
     on_warning_callback: Callable[..., Any] | None = None,  # argument specific to the DBT test command
+    task_group_func: Callable[..., dict[str, [str, DbtNode]] | None = None,
 ) -> None:
     """
     Instantiate dbt `nodes` as Airflow tasks within the given `task_group` (optional) or `dag` (mandatory).
@@ -285,7 +286,51 @@ def build_airflow_graph(
     :param task_group: Airflow Task Group instance
     :param on_warning_callback: A callback function called on warnings with additional Context variables “test_names”
     and “test_results” of type List.
+    :param task_group_func: A function that groups tasks into TaskGroups
     """
+
+    if task_group_func is not None:
+        grouped_nodes = task_group_func(nodes)
+        for group_id, node_meta in grouped_nodes.items():
+            with TaskGroup(dag=dag, group_id=group_id, parent_group=task_group):
+                tasks_map = _create_tasks(
+                    node_meta,
+                    dag,
+                    execution_mode,
+                    task_args,
+                    test_indirect_selection,
+                    dbt_project_name,
+                    render_config,
+                    task_group,
+                    on_warning_callback,
+                )
+    else:
+        tasks_map = _create_tasks(
+            nodes,
+            dag,
+            execution_mode,
+            task_args,
+            test_indirect_selection,
+            dbt_project_name,
+            render_config,
+            task_group,
+            on_warning_callback,
+        )
+
+    create_airflow_task_dependencies(nodes, tasks_map)
+
+
+def _create_tasks(
+    nodes: dict[str, DbtNode],
+    dag: DAG,
+    execution_mode: ExecutionMode,
+    task_args: dict[str, Any],
+    test_indirect_selection: TestIndirectSelection,
+    dbt_project_name: str,
+    render_config: RenderConfig,
+    task_group: TaskGroup | None = None,
+    on_warning_callback: Callable[..., Any] | None = None,
+) -> dict[str, Union[TaskGroup, BaseOperator]]:
     node_converters = render_config.node_converters or {}
     test_behavior = render_config.test_behavior
     source_rendering_behavior = render_config.source_rendering_behavior
@@ -300,6 +345,7 @@ def build_airflow_graph(
                 "Its syntax and behavior can be changed before a major release."
             )
         logger.debug(f"Converting <{node.unique_id}> using <{conversion_function.__name__}>")
+
         task_or_group = conversion_function(  # type: ignore
             dag=dag,
             task_group=task_group,
@@ -332,7 +378,7 @@ def build_airflow_graph(
         for leaf_node_id in leaves_ids:
             tasks_map[leaf_node_id] >> test_task
 
-    create_airflow_task_dependencies(nodes, tasks_map)
+    return tasks_map
 
 
 def create_airflow_task_dependencies(

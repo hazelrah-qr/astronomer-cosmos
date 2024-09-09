@@ -48,13 +48,22 @@ def basic_cosmos_task_group() -> None:
             select=["path:seeds/raw_customers.csv"],
             enable_mock_profile=False,
             env_vars={"PURGE": os.getenv("PURGE", "0")},
-            airflow_vars_to_purge_dbt_ls_cache=["purge"],
+            #airflow_vars_to_purge_dbt_ls_cache=["purge"],
         ),
         execution_config=shared_execution_config,
         operator_args={"install_deps": True},
         profile_config=profile_config,
         default_args={"retries": 2},
     )
+
+    def task_group_by_schema_func(nodes):
+        grouped = {}
+        for node_id, node in nodes.items():
+            if node.config.get("schema"):
+                grouped[node.config["schema"]] = {**grouped.get(node.config["schema"], {}), **{node_id: node}}
+            else:
+                grouped["default"] = {**grouped.get("default", {}), **{node_id: node}}
+        return grouped
 
     orders = DbtTaskGroup(
         group_id="orders",
@@ -69,6 +78,7 @@ def basic_cosmos_task_group() -> None:
         operator_args={"install_deps": True},
         profile_config=profile_config,
         default_args={"retries": 2},
+        task_group_func = task_group_by_schema_func,
     )
 
     post_dbt = EmptyOperator(task_id="post_dbt")

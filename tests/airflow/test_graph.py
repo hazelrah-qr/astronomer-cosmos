@@ -224,6 +224,73 @@ def test_build_airflow_graph_with_after_all():
     assert dag.leaves[0].select == ["tag:some"]
 
 
+@pytest.mark.skipif(
+    version.parse(airflow_version) < version.parse("2.4"),
+    reason="Airflow DAG did not have task_group_dict until the 2.4 release",
+)
+@pytest.mark.integration
+def test_build_airflow_graph_with_task_group_func():
+    nodes = {
+        "bronze": DbtNode(
+            unique_id=f"bronze.{SAMPLE_PROJ_PATH.stem}.dbt_node",
+            resource_type=DbtResourceType.MODEL,
+            file_path=SAMPLE_PROJ_PATH / "gen2/models/parent.sql",
+            tags=["has_child"],
+            config={"materialized": "view", "schema": "bronze"},
+            depends_on=[],
+            has_test=True,
+        ),
+        "silver": DbtNode(
+            unique_id=f"silver.{SAMPLE_PROJ_PATH.stem}.dbt_node",
+            resource_type=DbtResourceType.MODEL,
+            file_path=SAMPLE_PROJ_PATH / "gen2/models/parent.sql",
+            tags=["has_child"],
+            config={"materialized": "view", "schema": "silver"},
+            depends_on=[],
+            has_test=True,
+        ),
+    }
+
+    with DAG("test-id", start_date=datetime(2022, 1, 1)) as dag:
+        task_args = {
+            "project_dir": SAMPLE_PROJ_PATH,
+            "conn_id": "fake_conn",
+            "profile_config": ProfileConfig(
+                profile_name="default",
+                target_name="default",
+                profile_mapping=PostgresUserPasswordProfileMapping(
+                    conn_id="fake_conn",
+                    profile_args={"schema": "public"},
+                ),
+            ),
+        }
+        render_config = RenderConfig(
+            select=["tag:some"],
+            test_behavior=TestBehavior.AFTER_ALL,
+            source_rendering_behavior=SOURCE_RENDERING_BEHAVIOR,
+        )
+
+        def task_group_by_schema_func(nodes: dict[str, DbtNode]):
+            grouped = {}
+            for node_id, node in nodes.items():
+                if node.config.get("schema"):
+                    grouped[node.config["schema"]] = {**grouped.get(node.config["schema"], {}), **{node_id: node}}
+                else:
+                    grouped["default"] = {**grouped.get("default", {}), **{node_id: node}}
+            return grouped
+
+        build_airflow_graph(
+            nodes=nodes,
+            dag=dag,
+            execution_mode=ExecutionMode.LOCAL,
+            test_indirect_selection=TestIndirectSelection.EAGER,
+            task_args=task_args,
+            dbt_project_name="astro_shop",
+            render_config=render_config,
+            task_group_func=task_group_by_schema_func,
+        )
+
+
 def test_calculate_operator_class():
     class_module_import_path = calculate_operator_class(execution_mode=ExecutionMode.KUBERNETES, dbt_class="DbtSeed")
     assert class_module_import_path == "cosmos.operators.kubernetes.DbtSeedKubernetesOperator"

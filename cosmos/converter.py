@@ -208,6 +208,7 @@ class DbtToAirflowConverter:
         task_group: TaskGroup | None = None,
         operator_args: dict[str, Any] | None = None,
         on_warning_callback: Callable[..., Any] | None = None,
+        task_group_func: Callable[..., Any] | None = None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
@@ -302,6 +303,7 @@ class DbtToAirflowConverter:
             dbt_project_name=project_config.project_name,
             on_warning_callback=on_warning_callback,
             render_config=render_config,
+            task_group_func=task_group_func,
         )
 
         current_time = time.perf_counter()
